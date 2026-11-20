@@ -1178,6 +1178,86 @@ def testChapters():
             assert c.user_url == "http://example.com/%d" % i
 
 
+def testChaptersStrElementIds():
+    """Chapter element IDs may be str or bytes, both refer to the same
+    chapter and are stored (and saved) as bytes."""
+    test_file = "/tmp/chapters_str_ids.id3"
+    t = Tag()
+
+    ch1 = t.chapters.set("c1", (0, 200))
+    assert ch1.element_id == b"c1"
+
+    # str and bytes identify the same chapter
+    assert t.chapters.get("c1") is ch1
+    assert t.chapters.get(b"c1") is ch1
+    assert t.chapters["c1"] is ch1
+    assert t.chapters[b"c1"] is ch1
+
+    # Setting the same ID again (either type) updates, not duplicates
+    assert t.chapters.set("c1", (0, 300)) is ch1
+    assert t.chapters.set(b"c1", (0, 400)) is ch1
+    assert len(t.chapters) == 1
+    ch1.title = "Chapter 1"
+
+    t.save(test_file)
+    try:
+        t2 = eyed3.load(test_file).tag
+    finally:
+        os.remove(test_file)
+
+    assert len(t2.chapters) == 1
+    c = t2.chapters.get("c1")
+    assert c.element_id == b"c1"
+    assert c.times == (0, 400)
+    assert c.title == "Chapter 1"
+
+    assert t2.chapters.remove("c1") is not None
+    assert len(t2.chapters) == 0
+
+
+def testTableOfContentsStrElementIds():
+    """Toc element IDs (and child IDs) may be str or bytes; re-setting the
+    current top-level toc updates it instead of raising."""
+    test_file = "/tmp/toc_str_ids.id3"
+    t = Tag()
+
+    toc_main = t.table_of_contents.set("main", toplevel=True,
+                                       child_ids=["c1", "c2"],
+                                       description="Table of Contents")
+    assert toc_main.element_id == b"main"
+    assert toc_main.child_ids == [b"c1", b"c2"]
+
+    # str and bytes identify the same toc
+    assert t.table_of_contents.get("main") is toc_main
+    assert t.table_of_contents.get(b"main") is toc_main
+    assert t.table_of_contents["main"] is toc_main
+
+    # Updating the existing top-level toc is allowed
+    assert t.table_of_contents.set("main", toplevel=True, child_ids=["c1"],
+                                   description="Table of Contents") is toc_main
+    assert len(t.table_of_contents) == 1
+    assert toc_main.child_ids == [b"c1"]
+
+    # A *different* top-level toc is still rejected
+    with pytest.raises(ValueError):
+        t.table_of_contents.set("other", toplevel=True)
+
+    t.save(test_file)
+    try:
+        t2 = eyed3.load(test_file).tag
+    finally:
+        os.remove(test_file)
+
+    toc = t2.table_of_contents.get("main")
+    assert toc.element_id == b"main"
+    assert toc.toplevel
+    assert toc.child_ids == [b"c1"]
+    assert toc.description == "Table of Contents"
+
+    assert t2.table_of_contents.remove("main") is not None
+    assert len(t2.table_of_contents) == 0
+
+
 def testReadOnly():
     assert not(Tag.read_only)
 

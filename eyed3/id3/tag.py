@@ -1831,6 +1831,15 @@ class PopularitiesAccessor(AccessorBase):
         return super().get(email)
 
 
+def _elementIdToBytes(element_id):
+    """Chapter and table of contents element IDs are stored as byte strings.
+    For convenience ``str`` values are accepted and encoded as UTF-8 so that
+    lookups, updates and saves behave the same regardless of the type used."""
+    if element_id is None or isinstance(element_id, bytes):
+        return element_id
+    return str(element_id).encode("utf-8")
+
+
 class ChaptersAccessor(AccessorBase):
     def __init__(self, fs):
         def match_func(frame, element_id):
@@ -1838,6 +1847,7 @@ class ChaptersAccessor(AccessorBase):
         super().__init__(frames.CHAPTER_FID, fs, match_func)
 
     def set(self, element_id, times, offsets=(None, None), sub_frames=None):
+        element_id = _elementIdToBytes(element_id)
         flist = self._fs[frames.CHAPTER_FID] or []
         for chap in flist:
             if chap.element_id == element_id:
@@ -1854,14 +1864,15 @@ class ChaptersAccessor(AccessorBase):
         return chap
 
     def remove(self, element_id):
-        return super().remove(element_id)
+        return super().remove(_elementIdToBytes(element_id))
 
     def get(self, element_id):
-        return super().get(element_id)
+        return super().get(_elementIdToBytes(element_id))
 
     def __getitem__(self, elem_id):
         """Overriding the index based __getitem__ for one indexed with chapter
         element IDs. These are stored in the tag's table of contents frames."""
+        elem_id = _elementIdToBytes(elem_id)
         for chapter in (self._fs[frames.CHAPTER_FID] or []):
             if chapter.element_id == elem_id:
                 return chapter
@@ -1889,12 +1900,15 @@ class TocAccessor(AccessorBase):
     @requireUnicode("description")
     def set(self, element_id, toplevel=False, ordered=True, child_ids=None,
             description=""):
+        element_id = _elementIdToBytes(element_id)
+        if child_ids is not None:
+            child_ids = [_elementIdToBytes(cid) for cid in child_ids]
         flist = self._fs[frames.TOC_FID] or []
 
         # Enforce one top-level
         if toplevel:
             for toc in flist:
-                if toc.toplevel:
+                if toc.toplevel and toc.element_id != element_id:
                     raise ValueError("There may only be one top-level "
                                      "table of contents. Toc '%s' is current "
                                      "top-level." % toc.element_id)
@@ -1914,14 +1928,15 @@ class TocAccessor(AccessorBase):
         return toc
 
     def remove(self, element_id):
-        return super().remove(element_id)
+        return super().remove(_elementIdToBytes(element_id))
 
     def get(self, element_id):
-        return super().get(element_id)
+        return super().get(_elementIdToBytes(element_id))
 
     def __getitem__(self, elem_id):
         """Overriding the index based __getitem__ for one indexed with table
         of contents element IDs."""
+        elem_id = _elementIdToBytes(elem_id)
         for toc in (self._fs[frames.TOC_FID] or []):
             if toc.element_id == elem_id:
                 return toc

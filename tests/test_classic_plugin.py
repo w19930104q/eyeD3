@@ -889,3 +889,80 @@ def test_removeUnknownTags(audiofile, eyeD3):
     assert audiofile.tag.frame_set[b"TSSE"] and len(audiofile.tag.frame_set[b"TSSE"]) == 1
     assert audiofile.tag.frame_set[b"TSSE"][0].unknown == False
     assert audiofile.tag.unknown_frame_ids == set()
+
+
+def _generateMp3(path):
+    """Generates a small fixed mp3 file using ffmpeg."""
+    import subprocess
+    if not shutil.which("ffmpeg"):
+        pytest.skip("ffmpeg is required to generate test audio")
+    subprocess.run(["ffmpeg", "-y", "-f", "lavfi",
+                    "-i", "sine=frequency=440:duration=2",
+                    "-codec:a", "libmp3lame", str(path)],
+                   check=True, capture_output=True)
+    return str(path)
+
+
+@pytest.mark.parametrize("convert_opt,version",
+                         [(["--to-v2.3"], id3.ID3_V2_3),
+                          (["--to-v2.4"], id3.ID3_V2_4)])
+def test_chaptersAndToc(tmpdir, eyeD3, convert_opt, version):
+    audiofile = eyed3.load(_generateMp3(tmpdir / "chapters.mp3"))
+    assert audiofile is not None
+
+    # Create chapters and a (hierarchical) table of contents
+    audiofile = eyeD3(audiofile, convert_opt + [
+        "--add-chapter", "ch1:0:5000:Introduction",
+        "--add-chapter", "ch2:5000:10000",
+        "--add-chapter", "ch3:10000:15000:Outro",
+        "--add-toc", "main:ch1,ch2,sub:toplevel:description=All chapters",
+        "--add-toc", "sub:ch3:description=Bonus",
+    ])
+    tag = audiofile.tag
+    assert tag is not None
+    assert tag.version == version
+
+    # Chapters: times, titles and order survive the save/reload round trip
+    assert len(tag.chapters) == 3
+    assert [c.element_id for c in tag.chapters] == [b"ch1", b"ch2", b"ch3"]
+    assert tag.chapters.get("ch1").times == (0, 5000)
+    assert tag.chapters.get("ch1").title == "Introduction"
+    assert tag.chapters.get("ch2").times == (5000, 10000)
+    assert tag.chapters.get("ch2").title is None
+    assert tag.chapters.get("ch3").times == (10000, 15000)
+    assert tag.chapters.get("ch3").title == "Outro"
+
+    # Table of contents: hierarchy and child order survive the round trip
+    assert len(tag.table_of_contents) == 2
+    main_toc = tag.table_of_contents.get("main")
+    assert main_toc.toplevel
+    assert main_toc.ordered
+    assert main_toc.child_ids == [b"ch1", b"ch2", b"sub"]
+    assert main_toc.description == "All chapters"
+    sub_toc = tag.table_of_contents.get("sub")
+    assert not sub_toc.toplevel
+    assert sub_toc.child_ids == [b"ch3"]
+    assert sub_toc.description == "Bonus"
+
+    # Writing the same IDs again updates in place, nothing is duplicated
+    audiofile = eyeD3(audiofile, [
+        "--add-chapter", "ch2:5000:12000:Updated",
+        "--add-toc", "main:ch1,ch2:toplevel:description=All chapters",
+    ])
+    tag = audiofile.tag
+    assert tag.version == version
+    assert len(tag.chapters) == 3
+    assert tag.chapters.get("ch2").times == (5000, 12000)
+    assert tag.chapters.get("ch2").title == "Updated"
+    assert len(tag.table_of_contents) == 2
+    assert tag.table_of_contents.get("main").toplevel
+    assert tag.table_of_contents.get("main").child_ids == [b"ch1", b"ch2"]
+
+    # Removals
+    audiofile = eyeD3(audiofile, ["--remove-chapter", "ch3",
+                                  "--remove-toc", "sub"])
+    tag = audiofile.tag
+    assert len(tag.chapters) == 2
+    assert tag.chapters.get("ch3") is None
+    assert len(tag.table_of_contents) == 1
+    assert tag.table_of_contents.get("sub") is None

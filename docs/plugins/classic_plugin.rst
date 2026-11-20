@@ -123,6 +123,17 @@ Options
                           255 (best). The play count is optional, and defaults to 0, since there is already a dedicated play count frame.
     --remove-popularity EMAIL
                           Removes the popularity frame with the specified email key.
+    --add-chapter ELEMENT_ID:START:END[:TITLE]
+                          Add or update a chapter. ELEMENT_ID uniquely identifies the chapter; START and END are millisecond offsets from the start of the audio. TITLE is optional. Adding a
+                          chapter with an ELEMENT_ID that already exists updates it.
+    --remove-chapter ELEMENT_ID
+                          Remove the chapter with the specified ELEMENT_ID.
+    --add-toc ELEMENT_ID[:CHILD_IDS][:toplevel][:description=DESC]
+                          Add or update a table of contents. ELEMENT_ID uniquely identifies the table of contents; CHILD_IDS is a comma-separated list of chapter/toc element IDs, in order. The
+                          optional 'toplevel' field marks this as the top-level table of contents (only one is allowed) and 'description=DESC' sets an optional description. Adding a toc with an
+                          ELEMENT_ID that already exists updates it.
+    --remove-toc ELEMENT_ID
+                          Remove the table of contents with the specified ELEMENT_ID.
     --remove-v1           Remove ID3 v1.x tag.
     --remove-v2           Remove ID3 v2.x tag.
     --remove-all          Remove ID3 v1.x and v2.x tags.

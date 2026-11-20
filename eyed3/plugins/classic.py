@@ -278,6 +278,47 @@ optional. For example, 2012-03 is valid, 2012--12 is not.
                 raise ArgumentTypeError("Play count out-of-range")
             return (email, rating, play_count)
 
+        def ChapterArg(arg):
+            """ELEMENT_ID:START:END[:TITLE]
+            Returns (element_id, (start, end), title)
+            """
+            vals = _splitArgs(arg, 4)
+            if len(vals) < 3:
+                raise ArgumentTypeError("Incorrect number of argument components")
+            element_id = vals[0]
+            if not element_id:
+                raise ArgumentTypeError("element ID required")
+            try:
+                start, end = int(vals[1]), int(vals[2])
+            except ValueError:
+                raise ArgumentTypeError(
+                        "START and END must be millisecond integer values")
+            if start < 0 or end < 0:
+                raise ArgumentTypeError("START and END must be >= 0")
+            title = vals[3] if len(vals) > 3 else None
+            return element_id, (start, end), title
+
+        def TocArg(arg):
+            """ELEMENT_ID[:CHILD_IDS][:toplevel][:description=DESCRIPTION]
+            CHILD_IDS is a comma-separated list of chapter/toc element IDs.
+            Returns (element_id, toplevel, child_ids, description)
+            """
+            vals = _splitArgs(arg)
+            element_id = vals[0]
+            if not element_id:
+                raise ArgumentTypeError("element ID required")
+            toplevel = False
+            child_ids = []
+            description = ""
+            for v in vals[1:]:
+                if v == "toplevel":
+                    toplevel = True
+                elif v.startswith("description="):
+                    description = v[len("description="):]
+                elif v:
+                    child_ids.extend(cid for cid in v.split(",") if cid)
+            return element_id, toplevel, child_ids, description
+
         # Tag versions
         gid3.add_argument("-1", "--v1", action="store_const", const=id3.ID3_V1,
                           dest="tag_version", default=id3.ID3_ANY_VERSION,
@@ -401,6 +442,25 @@ optional. For example, 2012-03 is valid, 2012--12 is not.
                           dest="remove_popularity", default=[],
                           metavar="EMAIL",
                           help=ARGS_HELP["--remove-popularity"])
+
+        # Chapters and table of contents
+        gid3.add_argument("--add-chapter", action="append", type=ChapterArg,
+                          dest="chapters", default=[],
+                          metavar="ELEMENT_ID:START:END[:TITLE]",
+                          help=ARGS_HELP["--add-chapter"])
+        gid3.add_argument("--remove-chapter", action="append",
+                          dest="remove_chapters", default=[],
+                          metavar="ELEMENT_ID",
+                          help=ARGS_HELP["--remove-chapter"])
+        gid3.add_argument("--add-toc", action="append", type=TocArg,
+                          dest="tocs", default=[],
+                          metavar="ELEMENT_ID[:CHILD_IDS][:toplevel]"
+                                  "[:description=DESC]",
+                          help=ARGS_HELP["--add-toc"])
+        gid3.add_argument("--remove-toc", action="append",
+                          dest="remove_tocs", default=[],
+                          metavar="ELEMENT_ID",
+                          help=ARGS_HELP["--remove-toc"])
 
         gid3.add_argument("--remove-v1", action="store_true", dest="remove_v1",
                           default=False, help=ARGS_HELP["--remove-v1"])
@@ -723,6 +783,31 @@ optional. For example, 2012-03 is valid, 2012--12 is not.
                 printMsg("\nTerms of Use (%s): %s" % (boldText("USER"),
                                                       tag.terms_of_use))
 
+            # CHAP
+            for chapter in tag.chapters:
+                element_id = chapter.element_id
+                if isinstance(element_id, bytes):
+                    element_id = element_id.decode("utf-8")
+                title = " [Title: %s]" % chapter.title if chapter.title else ""
+                printMsg("%s: [ID: %s] [Start: %s] [End: %s]%s" % (
+                         boldText("Chapter"), element_id,
+                         chapter.times[0], chapter.times[1], title))
+
+            # CTOC
+            for toc in tag.table_of_contents:
+                element_id = toc.element_id
+                if isinstance(element_id, bytes):
+                    element_id = element_id.decode("utf-8")
+                child_ids = [cid.decode("utf-8") if isinstance(cid, bytes)
+                             else cid for cid in toc.child_ids]
+                desc = (" [Description: %s]" % toc.description
+                        if toc.description else "")
+                printMsg("%s: [ID: %s] [Top-level: %s] [Ordered: %s] "
+                         "[Children: %s]%s" % (
+                             boldText("Table of contents"), element_id,
+                             toc.toplevel, toc.ordered, ", ".join(child_ids),
+                             desc))
+
             # --verbose
             if self.args.verbose:
                 printMsg(self._getHardRule(self.terminal_width))
@@ -947,6 +1032,37 @@ optional. For example, 2012-03 is valid, 2012--12 is not.
             if popm:
                 retval = True
 
+        # --remove-chapter, --remove-toc
+        for what, arg, accessor in (("chapter", self.args.remove_chapters,
+                                     tag.chapters),
+                                    ("toc", self.args.remove_tocs,
+                                     tag.table_of_contents),
+                                   ):
+            for element_id in arg:
+                if accessor.remove(element_id):
+                    printWarning("Removed %s '%s'" % (what, element_id))
+                    retval = True
+                else:
+                    printError("Removing %s failed, '%s' not found" %
+                               (what, element_id))
+
+        # --add-chapter
+        for element_id, times, title in self.args.chapters:
+            printWarning("Setting chapter '%s': %d-%d" %
+                         (element_id, times[0], times[1]))
+            chapter = tag.chapters.set(element_id, times)
+            if title is not None:
+                chapter.title = title
+            retval = True
+
+        # --add-toc
+        for element_id, toplevel, child_ids, description in self.args.tocs:
+            printWarning("Setting table of contents '%s'" % element_id)
+            tag.table_of_contents.set(element_id, toplevel=toplevel,
+                                      child_ids=child_ids,
+                                      description=description)
+            retval = True
+
         # --text-frame, --url-frame
         for what, arg, setter in (
                 ("text frame", self.args.text_frames, tag.setTextFrame),
@@ -1142,6 +1258,24 @@ ARGS_HELP = {
                            "already a dedicated play count frame.",
         "--remove-popularity": "Removes the popularity frame with the "
                                "specified email key.",
+
+        "--add-chapter": "Add or update a chapter. ELEMENT_ID uniquely "
+                         "identifies the chapter; START and END are "
+                         "millisecond offsets from the start of the audio. "
+                         "TITLE is optional. Adding a chapter with an "
+                         "ELEMENT_ID that already exists updates it.",
+        "--remove-chapter": "Remove the chapter with the specified "
+                            "ELEMENT_ID.",
+        "--add-toc": "Add or update a table of contents. ELEMENT_ID uniquely "
+                     "identifies the table of contents; CHILD_IDS is a "
+                     "comma-separated list of chapter/toc element IDs, in "
+                     "order. The optional 'toplevel' field marks this as the "
+                     "top-level table of contents (only one is allowed) and "
+                     "'description=DESC' sets an optional description. Adding "
+                     "a toc with an ELEMENT_ID that already exists updates "
+                     "it.",
+        "--remove-toc": "Remove the table of contents with the specified "
+                        "ELEMENT_ID.",
 
         "--remove-v1": "Remove ID3 v1.x tag.",
         "--remove-v2": "Remove ID3 v2.x tag.",
