@@ -1059,6 +1059,55 @@ def test_TSST_Conversions():
         os.remove(test_file)
 
 
+def test_TMOO_Conversions():
+    test_file = "/tmp/tmoo.id3"
+
+    tag = Tag()
+    # 2.4 TMOO to 2.3 TXXX "TMOO"
+    tag.frame_set.setTextFrame(b"TMOO", "Happy")
+    # An unrelated user text frame that must survive all conversions.
+    tag.frame_set[b"TXXX"] = frames.UserTextFrame(description="other", text="data")
+    try:
+        tag.save(test_file)  # v2.4 is the default
+        tag = eyed3.load(test_file).tag
+        assert tag.version == ID3_V2_4
+        assert tag.getTextFrame(b"TMOO") == "Happy"
+
+        tag.save(test_file, version=eyed3.id3.ID3_V2_3)
+        tag = eyed3.load(test_file).tag
+        assert tag.version == ID3_V2_3
+        assert b"TMOO" not in tag.frame_set
+        assert b"TXXX" in tag.frame_set
+        txxx = [f for f in tag.frame_set[b"TXXX"]
+                if f.description == "TMOO"]
+        assert len(txxx) == 1
+        assert txxx[0].text == "Happy"
+        # Unrelated TXXX is preserved.
+        assert [f for f in tag.frame_set[b"TXXX"]
+                if f.description == "other" and f.text == "data"]
+
+        # Round trip back to 2.4 restores the original frame and value.
+        tag.save(test_file, version=eyed3.id3.ID3_V2_4)
+        tag = eyed3.load(test_file).tag
+        assert tag.version == ID3_V2_4
+        assert tag.getTextFrame(b"TMOO") == "Happy"
+        assert not [f for f in tag.frame_set[b"TXXX"]
+                    if f.description == "TMOO"]
+        assert [f for f in tag.frame_set[b"TXXX"]
+                if f.description == "other" and f.text == "data"]
+
+        # Repeated round trips are stable.
+        tag.save(test_file, version=eyed3.id3.ID3_V2_3)
+        tag = eyed3.load(test_file).tag
+        tag.save(test_file, version=eyed3.id3.ID3_V2_4)
+        tag = eyed3.load(test_file).tag
+        assert tag.getTextFrame(b"TMOO") == "Happy"
+        assert len([f for f in tag.frame_set[b"TXXX"]
+                    if f.description == "other"]) == 1
+    finally:
+        os.remove(test_file)
+
+
 @unittest.skipIf(not os.path.exists(DATA_D), "test requires data files")
 def testChapterExampleTag():
     tag = eyed3.load(os.path.join(DATA_D, "id3_chapters_example.mp3")).tag

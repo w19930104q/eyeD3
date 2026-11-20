@@ -21,6 +21,10 @@ log = getLogger(__name__)
 
 ID3_V1_COMMENT_DESC = "ID3v1.x Comment"
 ID3_V1_MAX_TEXTLEN = 30
+# The v2.4 TMOO (mood) frame has no v2.3 equivalent. When converting to v2.3
+# it is stored as a TXXX (user text) frame with this description, and the
+# TXXX frame is mapped back to TMOO when converting to v2.4.
+TMOO_USER_TEXT_DESC = "TMOO"
 ID3_V1_STRIP_CHARS = string.whitespace.encode("latin1") + b"\x00"
 DEFAULT_PADDING = 256
 
@@ -1015,6 +1019,12 @@ class Tag(core.Tag):
         std_frames = []
         non_std_frames = []
         for f in self.frame_set.getAllFrames():
+            if (target_version == ID3_V2_4 and f.id == b"TXXX" and
+                    getattr(f, "description", None) == TMOO_USER_TEXT_DESC):
+                # TXXX frames are valid in both v2.3 and v2.4, but this one
+                # carries a v2.4 TMOO value and must be converted back.
+                non_std_frames.append(f)
+                continue
             try:
                 _, fversion, _ = frames.ID3_FRAMES[f.id]
                 if fversion in (target_version, ID3_V2):
@@ -1336,6 +1346,19 @@ class Tag(core.Tag):
                     description="Subtitle (converted)", text=tsst_frame.text)
             converted_frames.append(tsst_frame)
 
+        # TMOO (v2.4) <--> TXXX "TMOO" (v2.3)
+        if version == ID3_V2_3:
+            for tmoo_frame in [f for f in flist if f.id == b"TMOO"]:
+                flist.remove(tmoo_frame)
+                converted_frames.append(frames.UserTextFrame(
+                        description=TMOO_USER_TEXT_DESC, text=tmoo_frame.text))
+        elif version == ID3_V2_4:
+            for txxx_frame in [f for f in flist if f.id == b"TXXX" and
+                               getattr(f, "description", None) == TMOO_USER_TEXT_DESC]:
+                flist.remove(txxx_frame)
+                converted_frames.append(TextFrame(b"TMOO",
+                                                  text=txxx_frame.text))
+
         # RVAD (v2.3) --> RVA2* (2.4)
         if version == ID3_V2_4 and b"RVAD" in [f.id for f in flist]:
             rvad = [f for f in flist if f.id == b"RVAD"][0]
@@ -1365,6 +1388,13 @@ class Tag(core.Tag):
         for cframe in converted_frames:
             for sframe in std_frames:
                 if cframe.id == sframe.id:
+                    if (cframe.id == b"TXXX" and
+                            getattr(cframe, "description", None) !=
+                            getattr(sframe, "description", None)):
+                        # TXXX frames are only replaced by a converted TXXX
+                        # with the same description; unrelated user text
+                        # frames must be preserved.
+                        continue
                     std_frames.remove(sframe)
 
         return converted_frames
