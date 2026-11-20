@@ -383,15 +383,33 @@ class DateFrame(TextFrame):
         super().parse(data, frame_header)
         try:
             if self.text:
-                _ = core.Date.parse(self.text)                        # noqa
+                if self.id in (b"TDAT", b"TIME"):
+                    # v2.3 frames storing DDMM (TDAT) and HHMM (TIME), not ISO 8601.
+                    if len(self.text) != 4 or not self.text.isdigit():
+                        raise ValueError(f"Invalid {self.id.decode('ascii')} text: {self.text}")
+                else:
+                    _ = core.Date.parse(self.text)                    # noqa
         except ValueError:
             # Date is invalid, log it and reset.
             core.parseError(FrameException(f"Invalid date: {self.text}"))
             self.text = ""
 
+    @staticmethod
+    def _v23TextToDateStr(fid, text):
+        """Convert raw v2.3 TDAT (DDMM) / TIME (HHMM) text to a string that
+        `core.Date.parse` supports, other text is returned unmodified."""
+        if fid == b"TDAT" and len(text) == 4 and text.isdigit():
+            return f"D{text[:2]}-{text[2:]}"
+        elif fid == b"TIME" and len(text) == 4 and text.isdigit():
+            return f"T{text[:2]}:{text[2:]}"
+        return text
+
     @property
     def date(self):
-        return core.Date.parse(self.text.encode("latin1")) if self.text else None
+        if not self.text:
+            return None
+        text = self._v23TextToDateStr(self.id, self.text)
+        return core.Date.parse(text.encode("latin1"))
 
     @date.setter
     def date(self, date):
@@ -402,6 +420,7 @@ class DateFrame(TextFrame):
 
         try:
             if type(date) is str:
+                date = self._v23TextToDateStr(self.id, date)
                 date = core.Date.parse(date)
             elif type(date) is int:
                 # Date is year

@@ -200,6 +200,45 @@ def test_DateFrame():
         assert not date.date
 
 
+def test_DateFrame_v23_TDAT_TIME():
+    """ID3v2.3 TDAT (DDMM) and TIME (HHMM) frames store raw 4 digit text,
+    not ISO 8601; the values must not be treated as (invalid) years."""
+    from eyed3.id3.frames import DateFrame
+    from eyed3.core import Date
+
+    # Raw DDMM/HHMM text, including zero-padded values
+    df = DateFrame(b"TDAT", "0501")
+    assert df.text == "0501"
+    assert df.date == Date(month=1, day=5)
+
+    df = DateFrame(b"TIME", "0905")
+    assert df.text == "0905"
+    assert df.date == Date(hour=9, minute=5)
+
+    # The special "Ddd-mm" / "Thh:mm" forms normalize to raw text
+    df = DateFrame(b"TDAT", "D05-01")
+    assert df.text == "0501"
+    assert df.date == Date(month=1, day=5)
+
+    df = DateFrame(b"TIME", "T09:05")
+    assert df.text == "0905"
+    assert df.date == Date(hour=9, minute=5)
+
+    # Date objects land as raw text as well
+    df = DateFrame(b"TDAT")
+    df.date = Date(month=1, day=5)
+    assert df.text == "0501"
+
+    df = DateFrame(b"TIME")
+    df.date = Date(hour=9, minute=5)
+    assert df.text == "0905"
+
+    # Invalid raw text is rejected
+    df = DateFrame(b"TDAT")
+    df.date = "05011"
+    assert not df.date
+
+
 def test_compression():
     f = open(__file__, "rb")
     try:

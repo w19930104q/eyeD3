@@ -1286,3 +1286,91 @@ def testRecordingDate_v23_issue517(id3tag, eyed3_version):
         assert id3tag.recording_date.year == d.year
         assert id3tag.recording_date.month is None
         assert id3tag.recording_date.day is None
+
+
+def testRecordingDate_v23_file_roundtrip():
+    """v2.3 stores recording dates split over TYER/TDAT/TIME. Zero-padded
+    TDAT (DDMM) and TIME (HHMM) values must survive a save and reload."""
+    test_file = "/tmp/v23_recording_date.id3"
+
+    dates = [Date(2020, 1, 5, 9, 5),      # all single digit components
+             Date(2020, 1, 5),
+             Date(2020, 11, 15, 13, 45),
+             Date(2020, 11, 15),
+             Date(2020)]
+    try:
+        for date in dates:
+            tag = Tag()
+            tag.recording_date = date
+            tag.save(test_file, version=ID3_V2_3)
+
+            tag = eyed3.load(test_file).tag
+            assert tag.version == ID3_V2_3
+            assert tag.recording_date == date
+    finally:
+        os.remove(test_file)
+
+
+def testRecordingDate_v23_repeated_write_read():
+    """Repeatedly writing and reading the same file must not alter the
+    recording date, and must not fabricate missing components."""
+    test_file = "/tmp/v23_recording_date_repeat.id3"
+
+    try:
+        for date in [Date(2020, 1, 5, 9, 5), Date(2020, 1, 5), Date(2020)]:
+            tag = Tag()
+            tag.recording_date = date
+            tag.save(test_file, version=ID3_V2_3)
+
+            for _ in range(3):
+                tag = eyed3.load(test_file).tag
+                assert tag.recording_date == date
+                # Rewrite what was read, the date must not drift.
+                tag.save(test_file, version=ID3_V2_3)
+    finally:
+        os.remove(test_file)
+
+
+def testRecordingDate_v23_sparse_overwrite():
+    """Overwriting a date with a less precise one must drop the stale
+    components, not retain the previous TDAT/TIME frames."""
+    test_file = "/tmp/v23_recording_date_sparse.id3"
+
+    try:
+        tag = Tag()
+        tag.recording_date = Date(2020, 1, 5, 9, 5)
+        tag.save(test_file, version=ID3_V2_3)
+
+        tag = eyed3.load(test_file).tag
+        tag.recording_date = Date(2020)
+        tag.save(test_file, version=ID3_V2_3)
+        assert eyed3.load(test_file).tag.recording_date == Date(2020)
+
+        tag = eyed3.load(test_file).tag
+        tag.recording_date = Date(2020, 3, 8)
+        tag.save(test_file, version=ID3_V2_3)
+        assert eyed3.load(test_file).tag.recording_date == Date(2020, 3, 8)
+    finally:
+        os.remove(test_file)
+
+
+def testRecordingDate_v24_v23_v24_conversion():
+    """A v2.4 recording date converted to v2.3 and back to v2.4 must not
+    lose components."""
+    test_file = "/tmp/v24_v23_v24_recording_date.id3"
+
+    try:
+        for date in [Date(2020, 1, 5, 9, 5), Date(2020, 1, 5), Date(2020)]:
+            tag = Tag()
+            tag.recording_date = date
+            tag.save(test_file, version=ID3_V2_3)
+
+            tag = eyed3.load(test_file).tag
+            assert tag.recording_date == date
+            tag.save(test_file, version=ID3_V2_4)
+
+            tag = eyed3.load(test_file).tag
+            assert tag.version == ID3_V2_4
+            assert tag.recording_date == date
+    finally:
+        os.remove(test_file)

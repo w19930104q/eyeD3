@@ -569,15 +569,19 @@ class Tag(core.Tag):
         else:
             if not isinstance(date, core.Date):
                 date = core.Date.parse(date)
-            self._setDate(b"TYER", str(date.year))
+            self._setDate(b"TYER", str(date.year) if date.year is not None else None)
             if None not in (date.month, date.day):
                 date_str = "D%s-%s" % (str(date.day).rjust(2, "0"),
                                      str(date.month).rjust(2, "0"))
                 self._setDate(b"TDAT", date_str)
+            else:
+                self._setDate(b"TDAT", None)
             if None not in (date.hour, date.minute):
                 date_str = "T%s:%s" % (str(date.hour).rjust(2, "0"),
                                      str(date.minute).rjust(2, "0"))
                 self._setDate(b"TIME", date_str)
+            else:
+                self._setDate(b"TIME", None)
 
     recording_date = property(_getRecordingDate, _setRecordingDate)
     """The date of the recording. Many applications use this for release date
@@ -591,15 +595,22 @@ class Tag(core.Tag):
             date_str = b""
             if b"TYER" in self.frame_set:
                 date_str = self.frame_set[b"TYER"][0].text.encode("latin1")
-                date = core.Date.parse(date_str)
+                if date_str:
+                    date = core.Date.parse(date_str)
             if b"TDAT" in self.frame_set:
                 text = self.frame_set[b"TDAT"][0].text.encode("latin1")
-                date_str += b"-%s-%s" % (text[2:], text[:2])
-                date = core.Date.parse(date_str)
+                if text:
+                    if date_str:
+                        date_str += b"-%s-%s" % (text[2:], text[:2])
+                    else:
+                        # No TYER, use the year-less "Ddd-mm" format.
+                        date_str = b"D%s-%s" % (text[:2], text[2:])
+                    date = core.Date.parse(date_str)
             if b"TIME" in self.frame_set:
                 text = self.frame_set[b"TIME"][0].text.encode("latin1")
-                date_str += b"T%s:%s" % (text[:2], text[2:])
-                date = core.Date.parse(date_str)
+                if text:
+                    date_str += b"T%s:%s" % (text[:2], text[2:])
+                    date = core.Date.parse(date_str)
         except ValueError as ex:
             log.warning("Invalid v2.3 TYER, TDAT, or TIME frame: %s" % ex)
 
@@ -1224,7 +1235,7 @@ class Tag(core.Tag):
         in the list).  The items in ``convert_list`` are the frames to convert
         and return. The ``version`` is the target ID3 version."""
         from . import versionToString
-        from .frames import DATE_FIDS, DEPRECATED_DATE_FIDS, DateFrame, TextFrame
+        from .frames import DATE_FIDS, DEPRECATED_DATE_FIDS, DateFrame
 
         if version[0] == 1:
             return self._convertFrames_v1(std_frames, convert_list, version)
@@ -1292,13 +1303,13 @@ class Tag(core.Tag):
                             date_str = "%s%s" %\
                                     (str(date.day).rjust(2, "0"),
                                      str(date.month).rjust(2, "0"))
-                            converted_frames.append(TextFrame(b"TDAT",
+                            converted_frames.append(DateFrame(b"TDAT",
                                                               date_str))
                         if None not in (date.hour, date.minute):
                             date_str = "%s%s" %\
                                     (str(date.hour).rjust(2, "0"),
                                      str(date.minute).rjust(2, "0"))
-                            converted_frames.append(TextFrame(b"TIME",
+                            converted_frames.append(DateFrame(b"TIME",
                                                               date_str))
 
                     fidHandled(b"TDRC")
