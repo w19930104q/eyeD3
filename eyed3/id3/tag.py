@@ -1342,17 +1342,107 @@ class Tag(core.Tag):
             for rva2 in rvad.toV24():
                 converted_frames.append(rva2)
             flist.remove(rvad)
-        # RVA2* (v2.4) --> RVAD (2.3)
-        elif version == ID3_V2_3 and b"RVA2" in [f.id for f in flist]:
-            adj = frames.RelVolAdjFrameV23.VolumeAdjustments()
-            for rva2 in [f for f in flist if f.id == b"RVA2"]:
-                adj.setChannelAdj(rva2.channel_type, rva2.adjustment * 512)
-                adj.setChannelPeak(rva2.channel_type, rva2.peak)
-                flist.remove(rva2)
+        # RVA2*/RGAD (v2.4) --> RVAD (2.3)
+        elif version == ID3_V2_3:
+            rva2_frames = [f for f in flist if f.id == b"RVA2"]
+            rgad_frames = [f for f in flist if f.id == b"RGAD"]
+            if rva2_frames or rgad_frames:
+                # The 2.3 RVAD frame stores every value as a 16-bit field.
+                RVAD_MIN, RVAD_MAX = -32768, 65535
 
-            rvad = frames.RelVolAdjFrameV23()
-            rvad.adjustments = adj
-            converted_frames.append(rvad)
+                def clamp(field_label, value):
+                    """Coerce to an int in the RVAD field range, warning on
+                    loss.  Fractional adjustments are truncated toward zero."""
+                    if isinstance(value, float) and not value.is_integer():
+                        log.warning(
+                            f"Rounding ReplayGain value {value} to {int(value)} "
+                            f"for {field_label}; v2.3 RVAD has no fractional unit")
+                        value = int(value)
+                    if value < RVAD_MIN or value > RVAD_MAX:
+                        clamped = max(RVAD_MIN, min(RVAD_MAX, int(value)))
+                        log.warning(
+                            f"ReplayGain value {value} for {field_label} is out "
+                            f"of the v2.3 RVAD 16-bit range "
+                            f"[{RVAD_MIN}, {RVAD_MAX}]; clamping to {clamped}")
+                        value = clamped
+                    return int(value)
+
+                adj = frames.RelVolAdjFrameV23.VolumeAdjustments()
+                channel_map = adj._channel_map
+                V24 = frames.RelVolAdjFrameV24
+                front_channels = (V24.CHANNEL_TYPE_FRONT_RIGHT,
+                                  V24.CHANNEL_TYPE_FRONT_LEFT)
+
+                def assign(chan_type, raw_adj, raw_peak, source_label):
+                    if chan_type not in channel_map:
+                        log.warning(
+                            f"Dropping {source_label} value for unsupported "
+                            f"RVA2 channel type {chan_type}")
+                        return
+                    attr = channel_map[chan_type]
+                    adj_value = clamp(f"{source_label} channel {attr} adjustment",
+                                      raw_adj)
+                    peak_value = clamp(f"{source_label} channel {attr} peak",
+                                       raw_peak)
+                    adj.setChannelAdj(chan_type, adj_value)
+                    if peak_value:
+                        adj.setChannelPeak(chan_type, peak_value)
+
+                # RGAD has no native 2.3 representation: mirror the *track*
+                # gain/peak onto both RVAD front channels.  Album values have
+                # no RVAD counterpart and are dropped with a warning.  Explicit
+                # RVA2 channels below take precedence over the mirror.
+                for rgad in rgad_frames:
+                    if rgad.album_gain or rgad.album_peak:
+                        log.warning(
+                            "RGAD album gain/peak cannot be represented in a "
+                            "v2.3 RVAD frame and were dropped "
+                            f"(album_gain={rgad.album_gain}, "
+                            f"album_peak={rgad.album_peak})")
+                    for chan_type in front_channels:
+                        assign(chan_type, rgad.track_gain, rgad.track_peak,
+                               "RGAD track")
+                    flist.remove(rgad)
+
+                # Explicit per-channel RVA2 values map directly.  The RVAD
+                # layout has no master/other/back-center fields; the master
+                # channel is mirrored onto both front channels below when
+                # those are not already populated explicitly.
+                master_frames = []
+                for rva2 in rva2_frames:
+                    if rva2.channel_type == V24.CHANNEL_TYPE_MASTER:
+                        master_frames.append(rva2)
+                    else:
+                        assign(rva2.channel_type, rva2.adjustment * 512,
+                               rva2.peak or 0, "RVA2")
+                    flist.remove(rva2)
+
+                for rva2 in master_frames:
+                    raw_adj = clamp("RVA2 master adjustment",
+                                    rva2.adjustment * 512)
+                    raw_peak = clamp("RVA2 master peak", rva2.peak or 0)
+                    free = [c for c in front_channels
+                            if not getattr(adj, channel_map[c])
+                            and not getattr(adj, f"{channel_map[c]}_peak")]
+                    if not free:
+                        log.warning(
+                            "RVA2 master volume adjustment cannot be "
+                            "represented in the v2.3 RVAD frame because both "
+                            "front channels are already set; dropping the "
+                            f"master value (adjustment={raw_adj}, "
+                            f"peak={raw_peak})")
+                        continue
+                    if len(free) == 1:
+                        log.warning(
+                            "Only one RVAD front channel is available; the "
+                            "RVA2 master adjustment is mirrored there instead "
+                            "of both front channels")
+                    for chan_type in free:
+                        assign(chan_type, raw_adj, raw_peak, "RVA2 master")
+
+                rvad = frames.RelVolAdjFrameV23()
+                rvad.adjustments = adj
+                converted_frames.append(rvad)
 
         # Raise an error for frames that could not be converted.
         if len(flist) != 0:

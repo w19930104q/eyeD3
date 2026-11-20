@@ -1433,6 +1433,101 @@ class RelVolAdjFrameV24(Frame):
         return super().render()
 
 
+class ReplayGainAdjustmentFrame(Frame):
+    """Non-standard ``RGAD`` (Replay Gain Adjustment) frame.
+
+    Used by foobar2000 and other tools to carry ReplayGain values directly in
+    a binary frame.  The layout is a 16-bit flags field followed by signed
+    16-bit values, each in the same 1/512 dB unit as RVA2 adjustments:
+
+        flags (16 bits, big endian)
+            bit 0 (0x0001): track gain present
+            bit 1 (0x0002): track peak present
+            bit 2 (0x0004): album gain present
+            bit 3 (0x0008): album peak present
+        track_gain, track_peak, album_gain, album_peak (signed int16 each,
+            in the order the flag bits above, for as many as are set)
+
+    Peak values are unsigned 16-bit (0-65535); the gain fields are signed.
+    """
+    TRACK_GAIN_FLAG = 0x0001
+    TRACK_PEAK_FLAG = 0x0002
+    ALBUM_GAIN_FLAG = 0x0004
+    ALBUM_PEAK_FLAG = 0x0008
+
+    def __init__(self, fid=b"RGAD", track_gain=0, track_peak=0,
+                 album_gain=0, album_peak=0):
+        if fid != b"RGAD":
+            raise ValueError(f"Unexpected frame ID: {fid}")
+        super().__init__(fid)
+        self.track_gain = track_gain
+        self.track_peak = track_peak
+        self.album_gain = album_gain
+        self.album_peak = album_peak
+
+    def parse(self, data, frame_header):
+        super().parse(data, frame_header)
+        data = self.data
+        if len(data) < 2:
+            raise FrameException("Invalid RGAD frame data: missing flags")
+
+        flags = bytes2dec(data[:2])
+        offset = 2
+        fields = [
+            (self.TRACK_GAIN_FLAG, "track_gain", True),
+            (self.TRACK_PEAK_FLAG, "track_peak", False),
+            (self.ALBUM_GAIN_FLAG, "album_gain", True),
+            (self.ALBUM_PEAK_FLAG, "album_peak", False),
+        ]
+        # Reset; only values advertised by the flags are set.
+        self.track_gain = self.track_peak = 0
+        self.album_gain = self.album_peak = 0
+        for flag, attr, signed in fields:
+            if not flags & flag:
+                continue
+            if offset + 2 > len(data):
+                raise FrameException(
+                    f"Invalid RGAD frame data: truncated {attr} value")
+            if signed:
+                value = bytes2signedInt16(data[offset:offset + 2])
+            else:
+                value = bytes2dec(data[offset:offset + 2])
+            setattr(self, attr, value)
+            offset += 2
+
+        log.debug(f"Parsed RGAD: track_gain={self.track_gain} "
+                  f"track_peak={self.track_peak} album_gain={self.album_gain} "
+                  f"album_peak={self.album_peak}")
+
+    def render(self):
+        if self.header is None:
+            self.header = FrameHeader(self.id, ID3_V2_4)
+        if self.header.version != ID3_V2_4:
+            raise ValueError("RGAD frames can only be rendered as ID3 v2.4")
+
+        flags = 0
+        values = []
+        for flag, value, signed in (
+            (self.TRACK_GAIN_FLAG, self.track_gain, True),
+            (self.TRACK_PEAK_FLAG, self.track_peak, False),
+            (self.ALBUM_GAIN_FLAG, self.album_gain, True),
+            (self.ALBUM_PEAK_FLAG, self.album_peak, False),
+        ):
+            if value:
+                flags |= flag
+                if signed:
+                    values.append(signedInt162bytes(int(value)))
+                else:
+                    if not 0 <= int(value) <= 0xFFFF:
+                        raise ValueError(
+                            f"RGAD peak value out of unsigned 16-bit range: "
+                            f"{value}")
+                    values.append(dec2bytes(int(value), 16))
+
+        self.data = dec2bytes(flags, 16) + b"".join(values)
+        return super().render()
+
+
 class RelVolAdjFrameV23(Frame):
     FRONT_CHANNEL_RIGHT_BIT = 0
     FRONT_CHANNEL_LEFT_BIT = 1
@@ -1614,6 +1709,22 @@ class RelVolAdjFrameV23(Frame):
             raise ValueError("Version is not 2.3")
 
         self.adjustments.boundsCheck()  # May raise ValueError
+
+        # The v2.3 RVAD layout has no fields for the master volume, the
+        # "other" channel, or the back center channel.  Warn rather than
+        # silently dropping the values.
+        for attr, label in (
+            ("master", "master"),
+            ("master_peak", "master peak"),
+            ("other", "other channel"),
+            ("other_peak", "other channel peak"),
+            ("back_center", "back center channel"),
+            ("back_center_peak", "back center channel peak"),
+        ):
+            if getattr(self.adjustments, attr):
+                log.warning(
+                    f"RVAD {label} value cannot be represented in the v2.3 "
+                    f"frame layout and was dropped")
 
         # Only the front channel is required
         inc_dec_bits[self.FRONT_CHANNEL_RIGHT_BIT] = 1 if self.adjustments.front_right > 0 else 0
@@ -2233,6 +2344,8 @@ TAGS2_2_TO_TAGS_2_3_AND_4 = {
 from . import apple                                                       # noqa
 NONSTANDARD_ID3_FRAMES = {
     b"NCON": ("Undefined MusicMatch extension", ID3_V2, Frame),
+    b"RGAD": ("Replay Gain Adjustment (foobar2000-style)",
+              ID3_V2_4, ReplayGainAdjustmentFrame),
     b"TCMP": ("iTunes compilation flag extension", ID3_V2, TextFrame),
     b"XSOA": ("Album sort-order string extension for v2.3",
               ID3_V2_3, TextFrame),
